@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>公务员招考 Excel 筛选（新增职位代码/部门代码/用人司局搜索）</title>
+
+  <!-- SheetJS -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    input, select, button { margin-right: 10px; padding: 4px 6px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 16px; font-size: 13px; }
+    th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+    th { background: #f3f3f3; }
+    #pagination button { margin: 2px; padding: 4px 8px; }
+    #pagination button[disabled] { background: #999; color: #fff; }
+  </style>
+</head>
+<body>
+
+<h2>📊 公务员招考 & 面试信息筛选（支持多列搜索）</h2>
+
+<input type="file" id="fileInput" accept=".xlsx,.xls" />
+
+<hr />
+
+<label>学历包含：<input type="text" id="degreeFilter" placeholder="如：本科 / 硕士"></label>
+<label>学历不包含：<input type="text" id="degreeExcludeFilter" placeholder="如：博士"></label>
+<label>招录机关：<input type="text" id="deptFilter" placeholder="模糊匹配"></label>
+<label>服务基层项目工作经历：<input type="text" id="serviceFilter" placeholder="模糊匹配"></label>
+<label>备注不包含：<input type="text" id="remarkExcludeFilter" placeholder="排除关键字"></label>
+<label>专业：<input type="text" id="majorFilter" placeholder="模糊匹配"></label>
+<label>职位/部门/用人司局：<input type="text" id="codeDeptJobFilter" placeholder="职位代码/部门代码/用人司局"></label>
+
+<label>最低面试分数排序：
+  <select id="scoreSort">
+    <option value="">不排序</option>
+    <option value="asc">升序</option>
+    <option value="desc">降序</option>
+  </select>
+</label>
+
+<button onclick="applyFilter()">筛选</button>
+
+<div id="info"></div>
+
+<table id="table"></table>
+<div id="pagination"></div>
+
+<script>
+let rawData = [], filteredData = []
+let allColumns = []
+const PAGE_SIZE = 50
+let currentPage = 1
+
+const table = document.getElementById('table')
+const info = document.getElementById('info')
+const pagination = document.getElementById('pagination')
+
+const degreeFilter = document.getElementById('degreeFilter')
+const degreeExcludeFilter = document.getElementById('degreeExcludeFilter')
+const deptFilter = document.getElementById('deptFilter')
+const serviceFilter = document.getElementById('serviceFilter')
+const remarkExcludeFilter = document.getElementById('remarkExcludeFilter')
+const majorFilter = document.getElementById('majorFilter')
+const codeDeptJobFilter = document.getElementById('codeDeptJobFilter')
+const scoreSort = document.getElementById('scoreSort')
+
+/* 读取 Excel */
+document.getElementById('fileInput').addEventListener('change', e => {
+  const file = e.target.files[0]
+  if (!file) return
+
+  const reader = new FileReader()
+  reader.onload = evt => {
+    const data = new Uint8Array(evt.target.result)
+    const wb = XLSX.read(data, { type: 'array' })
+    const sheet = wb.Sheets[wb.SheetNames[0]]
+    rawData = XLSX.utils.sheet_to_json(sheet)
+    filteredData = rawData
+    currentPage = 1
+    allColumns = rawData.length > 0 ? Object.keys(rawData[0]) : []
+    info.textContent = `已加载 ${rawData.length} 行数据，列数: ${allColumns.length}`
+    renderTable()
+  }
+  reader.readAsArrayBuffer(file)
+})
+
+/* 筛选 + 排序 */
+function applyFilter() {
+  currentPage = 1
+  const degree = degreeFilter.value.trim()
+  const degreeExclude = degreeExcludeFilter.value.trim()
+  const dept = deptFilter.value.trim()
+  const service = serviceFilter.value.trim()
+  const remarkExclude = remarkExcludeFilter.value.trim()
+  const major = majorFilter.value.trim()
+  const codeDeptJob = codeDeptJobFilter.value.trim()
+  const sort = scoreSort.value
+
+  filteredData = rawData.filter(row => {
+    const degreeVal = row['学历'] || ''
+    const remarkVal = row['备注'] || ''
+    const majorVal = row['专业'] || ''
+    const codeDeptJobVal = 
+      (row['职位代码'] || '') + '|' + 
+      (row['部门代码'] || '') + '|' + 
+      (row['用人司局'] || '')
+    
+    return (
+      (!degree || degreeVal.includes(degree)) &&
+      (!degreeExclude || !degreeVal.includes(degreeExclude)) &&
+      (!dept || (row['招录机关'] || '').includes(dept)) &&
+      (!service || (row['服务基层项目工作经历'] || '').includes(service)) &&
+      (!remarkExclude || !remarkVal.includes(remarkExclude)) &&
+      (!major || majorVal.includes(major)) &&
+      (!codeDeptJob || codeDeptJobVal.includes(codeDeptJob))
+    )
+  })
+
+  if (sort) {
+    filteredData.sort((a, b) => {
+      const sa = parseFloat(a['最低面试分数']) || Infinity
+      const sb = parseFloat(b['最低面试分数']) || Infinity
+      return sort === 'asc' ? sa - sb : sb - sa
+    })
+  }
+
+  renderTable()
+}
+
+/* 防抖 */
+function debounce(fn, delay = 300) {
+  let timer
+  return function () {
+    clearTimeout(timer)
+    timer = setTimeout(fn, delay)
+  }
+}
+
+const debouncedFilter = debounce(applyFilter)
+degreeFilter.oninput = debouncedFilter
+degreeExcludeFilter.oninput = debouncedFilter
+deptFilter.oninput = debouncedFilter
+serviceFilter.oninput = debouncedFilter
+remarkExcludeFilter.oninput = debouncedFilter
+majorFilter.oninput = debouncedFilter
+codeDeptJobFilter.oninput = debouncedFilter
+scoreSort.onchange = applyFilter
+
+/* 渲染表格（分页 + 所有列） */
+function renderTable() {
+  table.innerHTML = ''
+  pagination.innerHTML = ''
+
+  if (!filteredData.length) {
+    table.innerHTML = '<tr><td>无数据</td></tr>'
+    return
+  }
+
+  const start = (currentPage - 1) * PAGE_SIZE
+  const end = start + PAGE_SIZE
+  const pageData = filteredData.slice(start, end)
+
+  const trHead = document.createElement('tr')
+  allColumns.forEach(h => {
+    const th = document.createElement('th')
+    th.textContent = h
+    trHead.appendChild(th)
+  })
+  table.appendChild(trHead)
+
+  const frag = document.createDocumentFragment()
+  pageData.forEach(row => {
+    const tr = document.createElement('tr')
+    allColumns.forEach(h => {
+      const td = document.createElement('td')
+      td.textContent = row[h] ?? ''
+      tr.appendChild(td)
+    })
+    frag.appendChild(tr)
+  })
+  table.appendChild(frag)
+
+  renderPagination()
+}
+
+/* 分页按钮 */
+function renderPagination() {
+  const pageCount = Math.ceil(filteredData.length / PAGE_SIZE)
+  for (let i = 1; i <= pageCount; i++) {
+    const btn = document.createElement('button')
+    btn.textContent = i
+    btn.disabled = i === currentPage
+    btn.onclick = () => { currentPage = i; renderTable() }
+    pagination.appendChild(btn)
+  }
+  info.textContent =
+    `共 ${filteredData.length} 条 | 第 ${currentPage}/${pageCount} 页 | 列数: ${allColumns.length}`
+}
+</script>
+
+</body>
+</html>
